@@ -16,6 +16,10 @@
 #include <sys/sysinfo.h>
 extern void abort(void);
 
+#ifdef LINUX
+#include <ctype.h>
+#endif
+
 #ifdef SOLARIS
 #include <kstat.h>
 #endif
