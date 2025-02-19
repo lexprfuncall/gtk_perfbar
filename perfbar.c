@@ -348,7 +348,7 @@ static void redraw_app(perfbar_panel *panel) {
 }
 
 
-static void delete_cb(GtkWidget *w, gpointer data) {
+static void delete_cb(G_GNUC_UNUSED GtkWidget *w, G_GNUC_UNUSED gpointer data) {
   gtk_main_quit();
 }
 
@@ -357,7 +357,7 @@ gint update_cb(gpointer data) {
   return TRUE;
 }
 
-static gint resize_cb(GtkWidget *w, GdkEventConfigure *e, gpointer data)
+static gint resize_cb(GtkWidget *w, G_GNUC_UNUSED GdkEventConfigure *e, gpointer data)
 {
   perfbar_panel *panel = (perfbar_panel*)data;
   if (panel->d_buffer)
@@ -368,7 +368,7 @@ static gint resize_cb(GtkWidget *w, GdkEventConfigure *e, gpointer data)
   return TRUE;
 }
 
-static gint expose_cb(GtkWidget *w, GdkEventExpose* e, gpointer data)
+static gint expose_cb(G_GNUC_UNUSED GtkWidget *w, GdkEventExpose* e, gpointer data)
 {
   perfbar_panel *panel = (perfbar_panel*)data;
   gdk_draw_pixmap(panel->drawing_area->window, 
