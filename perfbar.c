@@ -9,6 +9,7 @@
 
 #include <unistd.h>
 #include <gtk/gtk.h>
+#include <pango/pangocairo.h>
 #include <sys/types.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,6 +65,8 @@ static guint64 smooth(guint64 current, guint64 prev, guint64 diff);
 #define DEFAULT_SPACER      1
 #define DEFAULT_HEIGHT    128
 #define DEFAULT_BAR_WIDTH   7
+#define MARGIN              4
+#define LABEL_HEIGHT       12
 
 /* Interval (millisecs) for gtk time-based update */
 #define UPDATE_INTERVAL 200
@@ -75,13 +78,23 @@ static char hostname[MAX_HOSTNAME_LENGTH];
 static void activate_cb(GtkApplication *app, G_GNUC_UNUSED gpointer user_data) {
   GtkWidget *window;
   perfbar_panel *panel;
-  int n = (int)(sysconf(_SC_NPROCESSORS_CONF));
+  int n;
+  GtkCssProvider *css;
 
   window = gtk_application_window_new(app);
 
   gethostname(hostname, MAX_HOSTNAME_LENGTH);
   gtk_window_set_title(GTK_WINDOW(window), hostname);
 
+  css = gtk_css_provider_new();
+  gtk_css_provider_load_from_string(css, "window { padding: 0; margin: 0; }");
+  gtk_style_context_add_provider_for_display(
+    gdk_display_get_default(),
+    GTK_STYLE_PROVIDER(css),
+    GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+  g_object_unref(css);
+
+  n = (int)(sysconf(_SC_NPROCESSORS_CONF));
   panel = create_panel(window, n);
   if (!panel)
     g_error("Can't create widgets!\n");
@@ -185,12 +198,13 @@ static perfbar_panel *create_panel(GtkWidget *window, int n) {
 
   width_scale = (n <= 2? 8 : n <= 4? 4 : n <= 8? 2 : 1);
   width = (2 * DEFAULT_SPACER + (DEFAULT_SPACER + DEFAULT_BAR_WIDTH) * n) *
-    width_scale;
+    width_scale + 2 * MARGIN;
   panel->spacer_width = DEFAULT_SPACER * width_scale;
 
   /* create widgets */
   panel->drawing_area = gtk_drawing_area_new();
-  gtk_widget_set_size_request(panel->drawing_area, width, DEFAULT_HEIGHT);
+  gtk_widget_set_size_request(panel->drawing_area, width,
+                              DEFAULT_HEIGHT + 2 * MARGIN + LABEL_HEIGHT);
 
   gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(panel->drawing_area),
                                  draw_func, panel, NULL);
@@ -198,29 +212,54 @@ static perfbar_panel *create_panel(GtkWidget *window, int n) {
   return panel;
 }
 
+static void draw_cpu_number(int i, cairo_t *cr,
+                            double bar_x, double bar_w,
+                            double inner_y, double inner_h) {
+  char label[11];
+  PangoLayout *layout;
+  PangoFontDescription *font_desc;
+  int tw, th;
+
+  snprintf(label, sizeof(label), "%d", i);
+  layout = pango_cairo_create_layout(cr);
+  pango_layout_set_text(layout, label, -1);
+  font_desc = pango_font_description_from_string("Sans 7");
+  pango_layout_set_font_description(layout, font_desc);
+  pango_layout_get_pixel_size(layout, &tw, &th);
+
+  cairo_set_source_rgb(cr, 0, 0, 0);
+  cairo_move_to(cr, bar_x + (bar_w - tw) / 2.0,
+                inner_y + inner_h + 1);
+  pango_cairo_show_layout(cr, layout);
+
+  pango_font_description_free(font_desc);
+  g_object_unref(layout);
+}
+
 static void draw_func(G_GNUC_UNUSED GtkDrawingArea *area, cairo_t *cr,
                        int width, int height, gpointer data) {
   perfbar_panel *panel = (perfbar_panel*)data;
-  gint x, i;
-  gint bar_width, spacer;
-  gint h_total;
+  gint i;
   int n = panel->ncpus;
 
   if (!panel->ready) return;
 
-  spacer = panel->spacer_width;
-  h_total = height - spacer * 2;
-  bar_width = (width - n * spacer) / n;
-  if (bar_width <= 0)
-    bar_width = 1;
-
-  /* clear top and bottom*/
-  cairo_rectangle(cr, 0, 0, width, spacer);
-  cairo_fill(cr);
-  cairo_rectangle(cr, 0, height - spacer, width, spacer);
+  /* fill entire background white (margin) */
+  gdk_cairo_set_source_rgba(cr, &panel->spacer_color);
+  cairo_rectangle(cr, 0, 0, width, height);
   cairo_fill(cr);
 
-  x = 0;
+  /* inset area for bars */
+  gint inner_x = MARGIN;
+  gint inner_y = MARGIN;
+  gint inner_w = width - 2 * MARGIN;
+  gint inner_h = height - 2 * MARGIN - LABEL_HEIGHT;
+  gint spacer = panel->spacer_width;
+  gint h_total = inner_h - spacer * 2;
+
+  /* use floating point to distribute bars evenly across the full width */
+  double slot_width = (double) inner_w / n;
+
   for (i = 0; i < n; i++) {
     guint64 d_idle = panel->diff[i].idle;
     guint64 d_user = panel->diff[i].user;
@@ -229,19 +268,21 @@ static void draw_func(G_GNUC_UNUSED GtkDrawingArea *area, cairo_t *cr,
     guint64 d_total = d_user + d_other + d_sys + d_idle;
     if (d_total == 0) /* assume idle if all 0 */
       d_idle = d_total = 1;
-    
-    int spc = spacer;
-    if (i == 0) {
-      spc = (width - n * bar_width - (n - 1) * spacer) / 2;
-      if (spc < 0) spc = 0;
-    }
-    gdk_cairo_set_source_rgba(cr, &panel->spacer_color);
-    cairo_rectangle(cr, x, 0, spc, height);
-    cairo_fill(cr);
-    x += spc;
 
-    gint y_user, y_other, y_sys, y_idle;
-    gint h_user, h_other, h_sys, h_idle, h_sum;
+    /* compute pixel boundaries for this slot, rounded to integers */
+    gint slot_x0 = inner_x + (int)(i * slot_width + 0.5);
+    gint slot_x1 = inner_x + (int)((i + 1) * slot_width + 0.5);
+    gint bar_x = slot_x0 + spacer;
+    gint bar_w = slot_x1 - slot_x0 - spacer;
+    if (bar_w <= 0) bar_w = 1;
+
+    /* draw spacer gap */
+    gdk_cairo_set_source_rgba(cr, &panel->spacer_color);
+    cairo_rectangle(cr, slot_x0, inner_y, spacer, inner_h);
+    cairo_fill(cr);
+
+    double y_user, y_other, y_sys, y_idle;
+    double h_user, h_other, h_sys, h_idle, h_sum;
     double scale = (double) h_total / d_total;
     
     h_user = scale * d_user;
@@ -267,40 +308,37 @@ static void draw_func(G_GNUC_UNUSED GtkDrawingArea *area, cairo_t *cr,
       h_sys = h_total - h_user - h_other - h_sys;
       h_sum = h_total;
     }
-    
-    y_user = h_total - h_user + spacer;
+
+    y_user = inner_y + inner_h - spacer - h_user;
     y_other = y_user - h_other;
     y_sys = y_other - h_sys;
-    y_idle = spacer;
-    
+    y_idle = inner_y + spacer;
+
     if (h_user > 0) {
       gdk_cairo_set_source_rgba(cr, &panel->user_color);
-      cairo_rectangle(cr, x, y_user, bar_width, h_user);
+      cairo_rectangle(cr, bar_x, y_user, bar_w, h_user);
       cairo_fill(cr);
     }
+
     if (h_other > 0) {
       gdk_cairo_set_source_rgba(cr, &panel->other_color);
-      cairo_rectangle(cr, x, y_other, bar_width, h_other);
+      cairo_rectangle(cr, bar_x, y_other, bar_w, h_other);
       cairo_fill(cr);
     }
+
     if (h_sys > 0) {
       gdk_cairo_set_source_rgba(cr, &panel->sys_color);
-      cairo_rectangle(cr, x, y_sys, bar_width, h_sys);
+      cairo_rectangle(cr, bar_x, y_sys, bar_w, h_sys);
       cairo_fill(cr);
     }
+
     if (h_idle > 0) {
       gdk_cairo_set_source_rgba(cr, &panel->idle_color);
-      cairo_rectangle(cr, x, y_idle, bar_width, h_idle);
+      cairo_rectangle(cr, bar_x, y_idle, bar_w, h_idle);
       cairo_fill(cr);
     }
-    x += bar_width;
-  }
 
-  /* clear rightmost side */
-  if (width - x > 0) {
-    gdk_cairo_set_source_rgba(cr, &panel->spacer_color);
-    cairo_rectangle(cr, x, 0, width - x, height);
-    cairo_fill(cr);
+    draw_cpu_number(i, cr, bar_x, bar_w, inner_y, inner_h);
   }
 }
 
