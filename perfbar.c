@@ -87,7 +87,7 @@ static void activate_cb(GtkApplication *app, G_GNUC_UNUSED gpointer user_data) {
     g_error("Can't create widgets!\n");
   get_times(panel);
 
-  gtk_window_set_child(GTK_WINDOW(window), panel->frame);
+  gtk_window_set_child(GTK_WINDOW(window), panel->drawing_area);
 
   gtk_widget_set_visible(window, TRUE);
   panel->ready = TRUE;
@@ -189,14 +189,11 @@ static perfbar_panel *create_panel(GtkWidget *window, int n) {
   panel->spacer_width = DEFAULT_SPACER * width_scale;
 
   /* create widgets */
-  panel->frame = gtk_frame_new(NULL);
   panel->drawing_area = gtk_drawing_area_new();
   gtk_widget_set_size_request(panel->drawing_area, width, DEFAULT_HEIGHT);
 
   gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(panel->drawing_area),
                                  draw_func, panel, NULL);
-
-  gtk_frame_set_child(GTK_FRAME(panel->frame), panel->drawing_area);
 
   return panel;
 }
