@@ -11,10 +11,10 @@
 #include <gtk/gtk.h>
 #include <sys/types.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/fcntl.h>
 #include <sys/sysinfo.h>
-extern void abort(void);
 
 #ifdef LINUX
 #include <ctype.h>
