@@ -44,30 +44,20 @@ typedef struct {
   GtkWidget *drawing_area;
 
   /* graphics */
-  GdkPixmap *d_buffer;
-  GdkGC *user_pen;
-  GdkGC *other_pen;
-  GdkGC *sys_pen;
-  GdkGC *spacer_pen;
-  GdkGC *idle_pen;
-  GdkColor user_color;
-  GdkColor other_color;
-  GdkColor sys_color;
-  GdkColor idle_color;
-  GdkColor spacer_color;
+  GdkRGBA user_color;
+  GdkRGBA other_color;
+  GdkRGBA sys_color;
+  GdkRGBA spacer_color;
+  GdkRGBA idle_color;
   gint spacer_width;
 
 } perfbar_panel; 
 
-static perfbar_panel *create_panel(GtkWidget *applet, int n);
+static perfbar_panel *create_panel(GtkWidget *window, int n);
 static void get_times(perfbar_panel* panel);
 static void make_diffs(perfbar_panel* panel);
-static void initialize_pens(perfbar_panel *panel);
 static gint update_cb(gpointer data);
-static gint resize_cb(GtkWidget *w, GdkEventConfigure *e, gpointer data);
-static gint expose_cb(GtkWidget *w, GdkEventExpose* e, gpointer data);
-static void redraw_app(perfbar_panel *panel);
-static void delete_cb(GtkWidget *w, gpointer data);
+static void draw_func(GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer data);
 static guint64 smooth(guint64 current, guint64 prev, guint64 diff);
 
 /* Default dimensions -- scaled (a bit) by ncpus below */
@@ -82,41 +72,39 @@ static guint64 smooth(guint64 current, guint64 prev, guint64 diff);
 #define MAX_HOSTNAME_LENGTH 256
 static char hostname[MAX_HOSTNAME_LENGTH];
 
-
-int main(int argc, char **argv) {
+static void activate_cb(GtkApplication *app, G_GNUC_UNUSED gpointer user_data) {
   GtkWidget *window;
   perfbar_panel *panel;
-
   int n = (int)(sysconf(_SC_NPROCESSORS_CONF));
-    
-  gtk_init(&argc, &argv);
-  window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+
+  window = gtk_application_window_new(app);
 
   gethostname(hostname, MAX_HOSTNAME_LENGTH);
-  gtk_window_set_title (GTK_WINDOW(window), hostname);
+  gtk_window_set_title(GTK_WINDOW(window), hostname);
 
   panel = create_panel(window, n);
   if (!panel)
     g_error("Can't create widgets!\n");
   get_times(panel);
 
-  gtk_container_add(GTK_CONTAINER(window), panel->frame);
+  gtk_window_set_child(GTK_WINDOW(window), panel->frame);
 
-  gtk_signal_connect(GTK_OBJECT(window), "destroy",
-                     GTK_SIGNAL_FUNC(delete_cb),
-                     panel);
-
-  /* I don't know why this is done. Just an incantation */
-  while (gtk_events_pending()) gtk_main_iteration()
-     ;
-
-  gtk_widget_show(window);
+  gtk_widget_set_visible(window, TRUE);
   panel->ready = TRUE;
 
-  gtk_timeout_add(UPDATE_INTERVAL, update_cb, panel);
+  g_timeout_add(UPDATE_INTERVAL, update_cb, panel);
   update_cb(panel);
-  gtk_main();
-  return 0;
+}
+
+int main(int argc, char **argv) {
+  GtkApplication *app;
+  int status;
+
+  app = gtk_application_new("org.perfbar", G_APPLICATION_DEFAULT_FLAGS);
+  g_signal_connect(app, "activate", G_CALLBACK(activate_cb), NULL);
+  status = g_application_run(G_APPLICATION(app), argc, argv);
+  g_object_unref(app);
+  return status;
 }
 
 static guint64 smooth(guint64 current, guint64 prev, guint64 diff) {
@@ -170,37 +158,30 @@ static perfbar_panel *create_panel(GtkWidget *window, int n) {
   panel->prev = tmp;
   get_times(panel);
 
-  panel->d_buffer = NULL;
-  panel->user_pen = NULL;
-  panel->other_pen = NULL;
-  panel->sys_pen = NULL;
-  panel->idle_pen = NULL;
-  panel->spacer_pen = NULL;
-
   panel->user_color.red = 0;
-  panel->user_color.green = 65535;
+  panel->user_color.green = 1.0;
   panel->user_color.blue = 0;
-  gdk_color_alloc(gdk_colormap_get_system(), &panel->user_color);
+  panel->user_color.alpha = 1.0;
 
-  panel->other_color.red = 58980;
-  panel->other_color.green = 58980;
-  panel->other_color.blue = 58980;
-  gdk_color_alloc(gdk_colormap_get_system(), &panel->other_color);
+  panel->other_color.red = 0.9;
+  panel->other_color.green = 0.9;
+  panel->other_color.blue = 0.9;
+  panel->other_color.alpha = 1.0;
 
-  panel->sys_color.red = 65535;
+  panel->sys_color.red = 1.0;
   panel->sys_color.green = 0;
   panel->sys_color.blue = 0;
-  gdk_color_alloc(gdk_colormap_get_system(), &panel->sys_color);
+  panel->sys_color.alpha = 1.0;
 
-  panel->spacer_color.red = 65535;
-  panel->spacer_color.green = 65535;
-  panel->spacer_color.blue = 65535;
-  gdk_color_alloc(gdk_colormap_get_system(), &panel->spacer_color);
+  panel->spacer_color.red = 1.0;
+  panel->spacer_color.green = 1.0;
+  panel->spacer_color.blue = 1.0;
+  panel->spacer_color.alpha = 1.0;
 
   panel->idle_color.red = 0;
   panel->idle_color.green = 0;
-  panel->idle_color.blue = 65535;
-  gdk_color_alloc(gdk_colormap_get_system(), &panel->idle_color);
+  panel->idle_color.blue = 1.0;
+  panel->idle_color.alpha = 1.0;
 
   width_scale = (n <= 2? 8 : n <= 4? 4 : n <= 8? 2 : 1);
   width = (2 * DEFAULT_SPACER + (DEFAULT_SPACER + DEFAULT_BAR_WIDTH) * n) *
@@ -210,49 +191,26 @@ static perfbar_panel *create_panel(GtkWidget *window, int n) {
   /* create widgets */
   panel->frame = gtk_frame_new(NULL);
   panel->drawing_area = gtk_drawing_area_new();
-  gtk_drawing_area_size(GTK_DRAWING_AREA(panel->drawing_area), 
-                        width, DEFAULT_HEIGHT);
+  gtk_widget_set_size_request(panel->drawing_area, width, DEFAULT_HEIGHT);
 
-  gtk_container_add(GTK_CONTAINER(panel->frame), panel->drawing_area);
-  gtk_widget_show_all(panel->frame);
+  gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(panel->drawing_area),
+                                 draw_func, panel, NULL);
 
-  gtk_signal_connect(GTK_OBJECT(panel->drawing_area), "configure_event",
-                     GTK_SIGNAL_FUNC(resize_cb), panel);
-  gtk_signal_connect(GTK_OBJECT(panel->drawing_area), "expose_event", 
-                     GTK_SIGNAL_FUNC(expose_cb), panel); 
+  gtk_frame_set_child(GTK_FRAME(panel->frame), panel->drawing_area);
 
   return panel;
 }
 
-static void initialize_pens(perfbar_panel *panel) {
-  panel->user_pen = gdk_gc_new(panel->drawing_area->window);
-  gdk_gc_set_foreground(panel->user_pen, &panel->user_color);
-
-  panel->other_pen = gdk_gc_new(panel->drawing_area->window);
-  gdk_gc_set_foreground(panel->other_pen, &panel->other_color);
-
-  panel->sys_pen = gdk_gc_new(panel->drawing_area->window);
-  gdk_gc_set_foreground(panel->sys_pen, &panel->sys_color);
-
-  panel->idle_pen = gdk_gc_new(panel->drawing_area->window);
-  gdk_gc_set_foreground(panel->idle_pen, &panel->idle_color);
-
-  panel->spacer_pen = gdk_gc_new(panel->drawing_area->window);
-  gdk_gc_set_foreground(panel->spacer_pen, &panel->spacer_color);
-}
-
-static void redraw_app(perfbar_panel *panel) {
+static void draw_func(G_GNUC_UNUSED GtkDrawingArea *area, cairo_t *cr,
+                       int width, int height, gpointer data) {
+  perfbar_panel *panel = (perfbar_panel*)data;
   gint x, i;
-  gint height, width, bar_width, spacer;
+  gint bar_width, spacer;
   gint h_total;
   int n = panel->ncpus;
 
   if (!panel->ready) return;
-  if (!panel->user_pen) 
-    initialize_pens(panel);
 
-  width = panel->drawing_area->allocation.width;
-  height = panel->drawing_area->allocation.height;
   spacer = panel->spacer_width;
   h_total = height - spacer * 2;
   bar_width = (width - n * spacer) / n;
@@ -260,11 +218,10 @@ static void redraw_app(perfbar_panel *panel) {
     bar_width = 1;
 
   /* clear top and bottom*/
-  gdk_draw_rectangle(panel->d_buffer, panel->spacer_pen, TRUE, 0, 0, width, spacer);
-  gdk_draw_rectangle(panel->d_buffer, panel->spacer_pen, TRUE, 0, height-spacer, width, spacer);
-
-  get_times(panel);
-  make_diffs(panel);
+  cairo_rectangle(cr, 0, 0, width, spacer);
+  cairo_fill(cr);
+  cairo_rectangle(cr, 0, height - spacer, width, spacer);
+  cairo_fill(cr);
 
   x = 0;
   for (i = 0; i < n; i++) {
@@ -281,8 +238,9 @@ static void redraw_app(perfbar_panel *panel) {
       spc = (width - n * bar_width - (n - 1) * spacer) / 2;
       if (spc < 0) spc = 0;
     }
-    gdk_draw_rectangle(panel->d_buffer, panel->spacer_pen, TRUE,
-                       x, 0, spc, height);
+    gdk_cairo_set_source_rgba(cr, &panel->spacer_color);
+    cairo_rectangle(cr, x, 0, spc, height);
+    cairo_fill(cr);
     x += spc;
 
     gint y_user, y_other, y_sys, y_idle;
@@ -318,64 +276,44 @@ static void redraw_app(perfbar_panel *panel) {
     y_sys = y_other - h_sys;
     y_idle = spacer;
     
-    if (h_user > 0) 
-      gdk_draw_rectangle(panel->d_buffer, panel->user_pen, TRUE,
-                         x, y_user, bar_width, h_user);
-    if (h_other > 0) 
-      gdk_draw_rectangle(panel->d_buffer, panel->other_pen, TRUE,
-                         x, y_other, bar_width, h_other);
-    if (h_sys > 0) 
-      gdk_draw_rectangle(panel->d_buffer, panel->sys_pen, TRUE,
-                         x, y_sys, bar_width, h_sys);
-    if (h_idle > 0) 
-      gdk_draw_rectangle(panel->d_buffer, panel->idle_pen, TRUE,
-                         x, y_idle, bar_width, h_idle);
+    if (h_user > 0) {
+      gdk_cairo_set_source_rgba(cr, &panel->user_color);
+      cairo_rectangle(cr, x, y_user, bar_width, h_user);
+      cairo_fill(cr);
+    }
+    if (h_other > 0) {
+      gdk_cairo_set_source_rgba(cr, &panel->other_color);
+      cairo_rectangle(cr, x, y_other, bar_width, h_other);
+      cairo_fill(cr);
+    }
+    if (h_sys > 0) {
+      gdk_cairo_set_source_rgba(cr, &panel->sys_color);
+      cairo_rectangle(cr, x, y_sys, bar_width, h_sys);
+      cairo_fill(cr);
+    }
+    if (h_idle > 0) {
+      gdk_cairo_set_source_rgba(cr, &panel->idle_color);
+      cairo_rectangle(cr, x, y_idle, bar_width, h_idle);
+      cairo_fill(cr);
+    }
     x += bar_width;
   }
 
   /* clear rightmost side */
-  if (width-x > 0) {
-    gdk_draw_rectangle(panel->d_buffer, panel->spacer_pen, TRUE,
-                       x, 0, width-x, height);
+  if (width - x > 0) {
+    gdk_cairo_set_source_rgba(cr, &panel->spacer_color);
+    cairo_rectangle(cr, x, 0, width - x, height);
+    cairo_fill(cr);
   }
-
-  /* copy to screen */
-  gdk_draw_pixmap(panel->drawing_area->window, 
-                  panel->drawing_area->style->fg_gc[GTK_WIDGET_STATE(panel->drawing_area)],
-                  panel->d_buffer, 0, 0, 0, 0, 
-                  width,
-                  height);
-}
-
-
-static void delete_cb(G_GNUC_UNUSED GtkWidget *w, G_GNUC_UNUSED gpointer data) {
-  gtk_main_quit();
 }
 
 gint update_cb(gpointer data) {
-  redraw_app((perfbar_panel*)data);
-  return TRUE;
-}
-
-static gint resize_cb(GtkWidget *w, G_GNUC_UNUSED GdkEventConfigure *e, gpointer data)
-{
   perfbar_panel *panel = (perfbar_panel*)data;
-  if (panel->d_buffer)
-    gdk_pixmap_unref(panel->d_buffer);
-  panel->d_buffer = gdk_pixmap_new(w->window, w->allocation.width,
-                                 w->allocation.height, -1);
-  redraw_app(panel);
+  if (!panel->ready) return TRUE;
+  get_times(panel);
+  make_diffs(panel);
+  gtk_widget_queue_draw(panel->drawing_area);
   return TRUE;
-}
-
-static gint expose_cb(G_GNUC_UNUSED GtkWidget *w, GdkEventExpose* e, gpointer data)
-{
-  perfbar_panel *panel = (perfbar_panel*)data;
-  gdk_draw_pixmap(panel->drawing_area->window, 
-                  panel->drawing_area->style->fg_gc[GTK_WIDGET_STATE(panel->drawing_area)],
-                  panel->d_buffer, e->area.x, e->area.y, e->area.x, e->area.y,
-                  e->area.width, e->area.height);
-  return FALSE;
 }
 
 

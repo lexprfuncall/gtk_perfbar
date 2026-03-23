@@ -1,11 +1,11 @@
 # Targets for solaris and linux. feel free to add others
 # Thanks to Michael Rumpf for helping to simplify this
 
-CFLAGS := $(shell pkg-config --cflags gtk+-2.0)
-LDFLAGS := $(shell pkg-config --libs gtk+-2.0)
+CFLAGS := $(shell pkg-config --cflags gtk4)
+LDFLAGS := $(shell pkg-config --libs gtk4)
 
 linux_perfbar: perfbar.c Makefile
-	gcc -O -DLINUX $(CFLAGS) $(LDFLAGS) -o linux_perfbar perfbar.c 
+	gcc -O -DLINUX $(CFLAGS) $(LDFLAGS) -o linux_perfbar perfbar.c
 
 
 solaris_sparc_perfbar: perfbar.c Makefile
